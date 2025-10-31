@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install numpy pandas scikit-learn tensorflow
 
       - name: Create Data directory
         run: mkdir -p Data
