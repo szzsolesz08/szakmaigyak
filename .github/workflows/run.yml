@@ -1,6 +1,9 @@
 name: Run Python Models (Sample Data)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
