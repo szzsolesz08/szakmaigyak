@@ -2,115 +2,123 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.svm import SVR
+from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.svm import SVR
+from tensorflow import keras
 
-# --- SMAPE függvény ---
-def smape(y_true, y_pred):
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2.0
-    diff = np.abs(y_true - y_pred) / denominator
-    diff[denominator == 0] = 0.0
-    return 100 * np.mean(diff)
-
+# --- 1. Adatok betöltése ---
 print("Loading data from Data/ ...")
+
 data_dir = "Data"
 csv_files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
 print("Found CSV files:", csv_files)
 
 dfs = []
-for file in csv_files:
-    path = os.path.join(data_dir, file)
+for f in csv_files:
+    path = os.path.join(data_dir, f)
     df = pd.read_csv(path, low_memory=False)
     dfs.append(df)
 
-data = pd.concat(dfs, ignore_index=True)
-print(f"Data shape: {data.shape}")
+data = pd.concat(dfs, axis=0, ignore_index=True)
+print("Data shape:", data.shape)
 
-# --- Célváltozó ---
+# --- 2. Céloszlop és featurek kiválasztása ---
 target_col = "arrivalDelay"
 if target_col not in data.columns:
     raise ValueError(f"Target column '{target_col}' not found in dataset!")
 
-# Csak numerikus feature-ök
-X = data.select_dtypes(include=[np.number]).drop(columns=[target_col], errors="ignore")
+# Válasszuk ki a hasznos numerikus feature-öket
+possible_features = [
+    "stopSequence",
+    "depatureDelay",
+    "timestamp",
+    "arrivalTime",
+    "depatureTime",
+    "tripID",
+    "stopID",
+]
+existing_features = [f for f in possible_features if f in data.columns]
+X = data[existing_features]
 y = data[target_col]
-
-# --- NaN-ok kezelése ---
-X = X.dropna(axis=1, how="all")  # teljesen üres oszlopok eldobása
-y = y.replace([np.inf, -np.inf], np.nan).dropna()
-
-# Szinkronizálás, hogy X és y ugyanannyi sort tartalmazzon
-common_index = X.index.intersection(y.index)
-X = X.loc[common_index]
-y = y.loc[common_index]
-
-# --- Imputálás ---
-imputer = SimpleImputer(strategy="median")
-X_imputed = imputer.fit_transform(X)
-X = pd.DataFrame(X_imputed, columns=X.columns)
 
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# --- Train-test split ---
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
+# --- 3. Hiányzó értékek kezelése ---
+imputer = SimpleImputer(strategy="median")
 
+# Csak az oszlopokat tartjuk meg, ahol van legalább egy nem-NaN érték
+valid_columns = X.columns[X.notna().any()].tolist()
+X = X[valid_columns]
+
+# Fit + transform
+X_imputed = imputer.fit_transform(X)
+
+# Ellenőrzés: ha eltérő a shape, logoljuk
+if X_imputed.shape[1] != len(valid_columns):
+    print(f"Warning: {len(valid_columns) - X_imputed.shape[1]} üres oszlop el lett dobva.")
+
+X = pd.DataFrame(X_imputed, columns=valid_columns)
+
+# Célváltozóból dobjuk a NaN-okat
+mask = ~y.isna()
+X = X.loc[mask]
+y = y.loc[mask]
+
+# --- 4. Train-test split ---
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# --- 5. Standardizálás ---
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# --- 6. Modellek betanítása és kiértékelése ---
 results = []
 
-# --- Modellek futtatása ---
-def evaluate_model(name, model, X_train, X_test, y_train, y_test):
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    smape_val = smape(y_test, y_pred)
-    print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
-    results.append([name, mae, rmse, smape_val])
+def evaluate_model(name, model):
+    try:
+        model.fit(X_train_scaled, y_train)
+        y_pred = model.predict(X_test_scaled)
+        mae = mean_absolute_error(y_test, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        smape = np.mean(2 * np.abs(y_pred - y_test) / (np.abs(y_pred) + np.abs(y_test) + 1e-8)) * 100
+        results.append((name, mae, rmse, smape))
+        print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
+    except Exception as e:
+        print(f"{name} failed: {e}")
 
+evaluate_model("Linear Regression", LinearRegression())
+evaluate_model("Random Forest", RandomForestRegressor(n_estimators=50, random_state=42))
+evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42))
+evaluate_model("SVR", SVR())
 
-# 1. Linear Regression
-evaluate_model("Linear Regression", LinearRegression(), X_train, X_test, y_train, y_test)
-
-# 2. Random Forest
-evaluate_model("Random Forest", RandomForestRegressor(n_estimators=50, n_jobs=-1, random_state=42),
-               X_train, X_test, y_train, y_test)
-
-# 3. Gradient Boosting
-evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42),
-               X_train, X_test, y_train, y_test)
-
-# 4. SVR
-evaluate_model("SVR", SVR(kernel='rbf'), X_train, X_test, y_train, y_test)
-
-# --- 5. Deep Neural Network ---
+# --- 7. Egyszerű DNN ---
 print("Training simple DNN...")
 
-dnn = Sequential([
-    Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
-    Dense(32, activation='relu'),
-    Dense(1)
+dnn = keras.Sequential([
+    keras.layers.Input(shape=(X_train_scaled.shape[1],)),
+    keras.layers.Dense(64, activation="relu"),
+    keras.layers.Dense(32, activation="relu"),
+    keras.layers.Dense(1)
 ])
-dnn.compile(optimizer='adam', loss='mse', metrics=['mae'])
-early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
-dnn.fit(X_train, y_train, epochs=10, batch_size=128, verbose=1, callbacks=[early_stop])
 
-y_pred_dnn = dnn.predict(X_test).flatten()
+dnn.compile(optimizer="adam", loss="mae")
+dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
+
+y_pred_dnn = dnn.predict(X_test_scaled).flatten()
+
 mae = mean_absolute_error(y_test, y_pred_dnn)
 rmse = np.sqrt(mean_squared_error(y_test, y_pred_dnn))
-smape_val = smape(y_test, y_pred_dnn)
-print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
-results.append(["DNN", mae, rmse, smape_val])
+smape = np.mean(2 * np.abs(y_pred_dnn - y_test) / (np.abs(y_pred_dnn) + np.abs(y_test) + 1e-8)) * 100
 
-# --- Mentés ---
+results.append(("DNN", mae, rmse, smape))
+print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
+
+# --- 8. Eredmények mentése ---
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
 results_df.to_csv("results.csv", index=False)
 print("\nSaved results to results.csv")
