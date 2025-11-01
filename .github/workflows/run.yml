@@ -30,12 +30,12 @@ jobs:
           curl -L -o Data/Trip_Update.csv https://github.com/Malek-01/Transit-delay-prediction/releases/download/Transit/Trip_Update.csv
           curl -L -o Data/Vehicle_Update.csv https://github.com/Malek-01/Transit-delay-prediction/releases/download/Transit/Vehicle_Update.csv
 
-      - name: Create sample CSVs (first 500000 rows)
+      - name: Create sample CSVs (first 50000 rows)
         run: |
           head -n 1 Data/Trip_Update.csv > Data/Trip_Update_sample.csv
-          tail -n +2 Data/Trip_Update.csv | head -n 500000 >> Data/Trip_Update_sample.csv
+          tail -n +2 Data/Trip_Update.csv | head -n 50000 >> Data/Trip_Update_sample.csv
           head -n 1 Data/Vehicle_Update.csv > Data/Vehicle_Update_sample.csv
-          tail -n +2 Data/Vehicle_Update.csv | head -n 500000 >> Data/Vehicle_Update_sample.csv
+          tail -n +2 Data/Vehicle_Update.csv | head -n 50000 >> Data/Vehicle_Update_sample.csv
           
       - name: Replace full CSVs with sample for fast testing
         run: |
