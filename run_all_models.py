@@ -2,29 +2,36 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.impute import SimpleImputer
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.callbacks import EarlyStopping
 
-# --- Adatok beolvasása ---
+# --- Funkciók ---
+def smape(y_true, y_pred):
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2.0
+    diff = np.abs(y_true - y_pred) / denominator
+    diff[denominator == 0] = 0.0
+    return 100 * np.mean(diff)
+
+
+# --- Adatbetöltés ---
 print("Loading data from Data/ ...")
 data_dir = "Data"
-files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
-print(f"Found CSV files: {files}")
+csv_files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+print("Found CSV files:", csv_files)
 
 dfs = []
-for file in files:
+for file in csv_files:
     path = os.path.join(data_dir, file)
     df = pd.read_csv(path, low_memory=False)
     dfs.append(df)
 
-data = pd.concat(dfs, axis=0, ignore_index=True)
+data = pd.concat(dfs, ignore_index=True)
 print(f"Data shape: {data.shape}")
 
 # --- Célváltozó és featurek ---
@@ -35,70 +42,82 @@ if target_col not in data.columns:
 X = data.select_dtypes(include=[np.number]).drop(columns=[target_col], errors="ignore")
 y = data[target_col].astype(float)
 
-# --- hiányzó értékek kezelése ---
+# Teljesen üres oszlopok eldobása
+X = X.dropna(axis=1, how="all")
+
+# --- Hiányzó értékek kezelése ---
 imputer = SimpleImputer(strategy="median")
 X_imputed = imputer.fit_transform(X)
 X = pd.DataFrame(X_imputed, columns=X.columns)
 
-# --- csak véletlen mintavétel a nagy fájlokhoz ---
-if len(X) > 100000:
-    sample_size = 100000
-    X = X.sample(sample_size, random_state=42)
-    y = y.loc[X.index]
-    print(f"Using random sample of {sample_size} rows")
+print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# --- train-test split ---
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
-print(f"Features shape: {X_train.shape}, Target shape: {y_train.shape}")
-
-# --- normalizálás ---
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+# --- Train-test split ---
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 results = []
 
-def evaluate_model(name, model, X_train, X_test, y_train, y_test):
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    smape = 100 * np.mean(
-        np.abs((y_pred - y_test) / ((np.abs(y_pred) + np.abs(y_test)) / 2))
-    )
-    results.append({"Model": name, "MAE": mae, "RMSE": rmse, "sMAPE": smape})
-    print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
+# --- 1. Linear Regression ---
+lr = LinearRegression()
+lr.fit(X_train, y_train)
+y_pred_lr = lr.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred_lr)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred_lr))
+smape_val = smape(y_test, y_pred_lr)
+print(f"Linear Regression: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
+results.append(["Linear Regression", mae, rmse, smape_val])
 
-# --- Klasszikus modellek ---
-evaluate_model("Linear Regression", LinearRegression(), X_train_scaled, X_test_scaled, y_train, y_test)
-evaluate_model("Random Forest", RandomForestRegressor(n_estimators=50, random_state=42), X_train_scaled, X_test_scaled, y_train, y_test)
-evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42), X_train_scaled, X_test_scaled, y_train, y_test)
-evaluate_model("SVR", SVR(), X_train_scaled, X_test_scaled, y_train, y_test)
+# --- 2. Random Forest ---
+rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
+rf.fit(X_train, y_train)
+y_pred_rf = rf.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred_rf)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred_rf))
+smape_val = smape(y_test, y_pred_rf)
+print(f"Random Forest: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
+results.append(["Random Forest", mae, rmse, smape_val])
 
-# --- DNN modell ---
+# --- 3. Gradient Boosting ---
+gb = GradientBoostingRegressor(random_state=42)
+gb.fit(X_train, y_train)
+y_pred_gb = gb.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred_gb)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred_gb))
+smape_val = smape(y_test, y_pred_gb)
+print(f"Gradient Boosting: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
+results.append(["Gradient Boosting", mae, rmse, smape_val])
+
+# --- 4. Support Vector Regressor ---
+svr = SVR(kernel='rbf')
+svr.fit(X_train, y_train)
+y_pred_svr = svr.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred_svr)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred_svr))
+smape_val = smape(y_test, y_pred_svr)
+print(f"SVR: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
+results.append(["SVR", mae, rmse, smape_val])
+
+# --- 5. Egyszerű DNN ---
 print("Training simple DNN...")
-dnn = keras.Sequential([
-    layers.Input(shape=(X_train_scaled.shape[1],)),
-    layers.Dense(64, activation="relu"),
-    layers.Dense(32, activation="relu"),
-    layers.Dense(1)
+dnn = Sequential([
+    Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
+    Dense(32, activation='relu'),
+    Dense(1)
 ])
 
-dnn.compile(optimizer="adam", loss="mae")
-dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
+dnn.compile(optimizer='adam', loss='mse', metrics=['mae'])
+early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
+dnn.fit(X_train, y_train, epochs=10, batch_size=128, verbose=1, callbacks=[early_stop])
 
-y_pred_dnn = dnn.predict(X_test_scaled).flatten()
+y_pred_dnn = dnn.predict(X_test).flatten()
 mae = mean_absolute_error(y_test, y_pred_dnn)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred_dnn))  # <-- fix: nincs squared paraméter
-smape = 100 * np.mean(np.abs((y_pred_dnn - y_test) / ((np.abs(y_pred_dnn) + np.abs(y_test)) / 2)))
+rmse = np.sqrt(mean_squared_error(y_test, y_pred_dnn))
+smape_val = smape(y_test, y_pred_dnn)
+print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape_val:.3f}")
+results.append(["DNN", mae, rmse, smape_val])
 
-results.append({"Model": "DNN", "MAE": mae, "RMSE": rmse, "sMAPE": smape})
-print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
-
-# --- eredmények mentése ---
-results_df = pd.DataFrame(results)
+# --- Eredmények mentése ---
+results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
 results_df.to_csv("results.csv", index=False)
 print("\nSaved results to results.csv")
 print(results_df)
