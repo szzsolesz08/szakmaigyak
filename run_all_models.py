@@ -31,7 +31,6 @@ target_col = "arrivalDelay"
 if target_col not in data.columns:
     raise ValueError(f"Target column '{target_col}' not found in dataset!")
 
-# Válasszuk ki a hasznos numerikus feature-öket
 possible_features = [
     "stopSequence",
     "depatureDelay",
@@ -42,41 +41,49 @@ possible_features = [
     "stopID",
 ]
 existing_features = [f for f in possible_features if f in data.columns]
-X = data[existing_features]
-y = data[target_col]
+X = data[existing_features].copy()
+y = data[target_col].copy()
 
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# --- 3. Hiányzó értékek kezelése ---
+# --- 3. Numerikus konverzió ---
+# Minden oszlopot numerikus típusra próbálunk konvertálni, a nem konvertálható értékek NaN lesznek
+for col in X.columns:
+    X[col] = (
+        X[col]
+        .astype(str)
+        .str.replace(",", ".", regex=False)
+        .replace("nan", np.nan)
+    )
+    X[col] = pd.to_numeric(X[col], errors="coerce")
+
+# --- 4. Hiányzó értékek kezelése ---
 imputer = SimpleImputer(strategy="median")
 
-# Csak az oszlopokat tartjuk meg, ahol van legalább egy nem-NaN érték
+# Csak a nem üres oszlopok maradnak
 valid_columns = X.columns[X.notna().any()].tolist()
 X = X[valid_columns]
 
-# Fit + transform
 X_imputed = imputer.fit_transform(X)
-
-# Ellenőrzés: ha eltérő a shape, logoljuk
-if X_imputed.shape[1] != len(valid_columns):
-    print(f"Warning: {len(valid_columns) - X_imputed.shape[1]} üres oszlop el lett dobva.")
-
 X = pd.DataFrame(X_imputed, columns=valid_columns)
 
-# Célváltozóból dobjuk a NaN-okat
+# Célváltozó tisztítása
+y = pd.to_numeric(y, errors="coerce")
 mask = ~y.isna()
 X = X.loc[mask]
 y = y.loc[mask]
 
-# --- 4. Train-test split ---
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# --- 5. Train-test split ---
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
 
-# --- 5. Standardizálás ---
+# --- 6. Standardizálás ---
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-# --- 6. Modellek betanítása és kiértékelése ---
+# --- 7. Modellek betanítása és kiértékelése ---
 results = []
 
 def evaluate_model(name, model):
@@ -96,7 +103,7 @@ evaluate_model("Random Forest", RandomForestRegressor(n_estimators=50, random_st
 evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42))
 evaluate_model("SVR", SVR())
 
-# --- 7. Egyszerű DNN ---
+# --- 8. Egyszerű DNN ---
 print("Training simple DNN...")
 
 dnn = keras.Sequential([
@@ -110,7 +117,6 @@ dnn.compile(optimizer="adam", loss="mae")
 dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
 
 y_pred_dnn = dnn.predict(X_test_scaled).flatten()
-
 mae = mean_absolute_error(y_test, y_pred_dnn)
 rmse = np.sqrt(mean_squared_error(y_test, y_pred_dnn))
 smape = np.mean(2 * np.abs(y_pred_dnn - y_test) / (np.abs(y_pred_dnn) + np.abs(y_test) + 1e-8)) * 100
@@ -118,7 +124,7 @@ smape = np.mean(2 * np.abs(y_pred_dnn - y_test) / (np.abs(y_pred_dnn) + np.abs(y
 results.append(("DNN", mae, rmse, smape))
 print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
 
-# --- 8. Eredmények mentése ---
+# --- 9. Eredmények mentése ---
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
 results_df.to_csv("results.csv", index=False)
 print("\nSaved results to results.csv")
