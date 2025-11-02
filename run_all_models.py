@@ -74,8 +74,9 @@ y_pred = gb.predict(X_test_full)
 evaluate_model("Gradient Boosting", y_test, y_pred)
 
 # ========= SVM-FS (feature selection + SVR with GridSearch) ==========
-# Feature selection
-selector = SelectKBest(f_regression, k=25)
+# Dynamic k for SelectKBest
+k = min(25, X_numeric.shape[1])
+selector = SelectKBest(f_regression, k=k)
 X_train_fs = selector.fit_transform(X_train_scaled, y_train)
 X_test_fs = selector.transform(X_test_scaled)
 
