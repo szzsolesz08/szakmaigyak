@@ -27,16 +27,21 @@ print("Found CSV files:", csv_files)
 
 # Combine them
 dfs = [pd.read_csv(os.path.join(data_path, f), low_memory=False) for f in csv_files]
-df = pd.concat(dfs, axis=1)
+
+# Handle duplicate column names
+for i, df_temp in enumerate(dfs):
+    df_temp.columns = [f"{col}_{i}" if list(dfs[i].columns).count(col) > 1 else col for col in df_temp.columns]
+
+df = pd.concat(dfs, axis=1, ignore_index=False)
 print("Data shape:", df.shape)
 
-# Handle missing values, non-numeric columns, etc.
+# Replace commas with dots (for numeric conversion)
 df = df.replace(",", ".", regex=True)
 
 # Encode non-numeric columns
 label_encoders = {}
 for col in df.columns:
-    if df[col].dtype == 'object':
+    if isinstance(df[col], pd.Series) and df[col].dtype == 'object':
         le = LabelEncoder()
         df[col] = le.fit_transform(df[col].astype(str))
         label_encoders[col] = le
