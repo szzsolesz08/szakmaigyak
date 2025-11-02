@@ -25,14 +25,24 @@ data_path = "Data"
 csv_files = [f for f in os.listdir(data_path) if f.endswith(".csv")]
 print("Found CSV files:", csv_files)
 
-# Combine them
+# Load CSVs
 dfs = [pd.read_csv(os.path.join(data_path, f), low_memory=False) for f in csv_files]
 
-# Handle duplicate column names
+# Handle duplicate column names and concatenate
+dfs_fixed = []
+existing_cols = set()
 for i, df_temp in enumerate(dfs):
-    df_temp.columns = [f"{col}_{i}" if list(dfs[i].columns).count(col) > 1 else col for col in df_temp.columns]
+    new_cols = []
+    for col in df_temp.columns:
+        if col in existing_cols:
+            new_cols.append(f"{col}_{i}")
+        else:
+            new_cols.append(col)
+        existing_cols.add(new_cols[-1])
+    df_temp.columns = new_cols
+    dfs_fixed.append(df_temp)
 
-df = pd.concat(dfs, axis=1, ignore_index=False)
+df = pd.concat(dfs_fixed, axis=1, ignore_index=False)
 print("Data shape:", df.shape)
 
 # Replace commas with dots (for numeric conversion)
@@ -41,7 +51,7 @@ df = df.replace(",", ".", regex=True)
 # Encode non-numeric columns
 label_encoders = {}
 for col in df.columns:
-    if isinstance(df[col], pd.Series) and df[col].dtype == 'object':
+    if df[col].dtype == 'object':
         le = LabelEncoder()
         df[col] = le.fit_transform(df[col].astype(str))
         label_encoders[col] = le
@@ -53,9 +63,9 @@ y = df.iloc[:, -1]
 # Drop constant or all-NaN columns
 X = X.loc[:, X.nunique() > 1]
 
-# Convert all columns to numeric, coerce errors to NaN
-for col in X.columns:
-    X[col] = pd.to_numeric(X[col], errors='coerce')
+# Convert all columns to numeric safely
+X = X.apply(pd.to_numeric, errors='coerce')
+y = pd.to_numeric(y, errors='coerce')
 
 # Impute missing values
 imputer = SimpleImputer(strategy="median")
@@ -63,7 +73,6 @@ X_imputed = imputer.fit_transform(X)
 X = pd.DataFrame(X_imputed, columns=X.columns)
 
 # Remove NaNs from target
-y = pd.to_numeric(y, errors='coerce')
 mask = ~np.isnan(y)
 X = X.loc[mask]
 y = y.loc[mask]
@@ -104,7 +113,6 @@ results.append(["Gradient Boosting",
 
 # 4. SVM-FS (replaces SVR)
 print("Running SVM-FS model...")
-# Feature selection
 selector = SelectKBest(f_regression, k=min(15, X_train.shape[1]))
 X_train_fs = selector.fit_transform(X_train, y_train)
 X_test_fs = selector.transform(X_test)
