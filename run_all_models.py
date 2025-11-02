@@ -1,13 +1,13 @@
 import os
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 
 # ========= Helper metric ==========
@@ -27,11 +27,22 @@ X_numeric = data.select_dtypes(include=[np.number]).drop(columns=[target_col], e
 y = data[target_col]
 
 # ========= NaN kezelése ==========
-# A cikk szerint minden NaN -> 0
-X_numeric = X_numeric.fillna(0).astype(float)
-y = y.fillna(0).astype(float)
+# Medián imputálás mindenhol
+X_numeric = X_numeric.fillna(X_numeric.median())
+y = y.fillna(y.median())
 
 results = []
+
+# ========= Train-test split ==========
+# Véletlenszerű split 80-20%
+X_train_full, X_test_full, y_train, y_test = train_test_split(
+    X_numeric, y, test_size=0.2, random_state=42
+)
+
+# ========= Scaling ==========
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train_full)
+X_test_scaled = scaler.transform(X_test_full)
 
 # ========= Model evaluation helper ==========
 def evaluate_model(name, y_test, preds):
@@ -42,17 +53,6 @@ def evaluate_model(name, y_test, preds):
     results.append([name, mae, rmse, sm, r2])
     print(f"{name}: R2={r2:.5f}, MAE={mae:.5f}, RMSE={rmse:.5f}, sMAPE={sm:.5f}")
 
-# ========= Train-test split ==========
-# Folyamatos 80%-20% split (nem véletlenszerű)
-split_index = int(0.8 * len(X_numeric))
-X_train_full, X_test_full = X_numeric[:split_index], X_numeric[split_index:]
-y_train, y_test = y[:split_index].values, y[split_index:].values
-
-# ========= Scaling ==========
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train_full)
-X_test_scaled = scaler.transform(X_test_full)
-
 # ========= Linear Regression ==========
 lr = LinearRegression()
 lr.fit(X_train_scaled, y_train)
@@ -61,7 +61,7 @@ evaluate_model("Linear Regression", y_test, y_pred)
 
 # ========= Random Forest ==========
 rf = RandomForestRegressor(n_estimators=100, random_state=42)
-rf.fit(X_train_full, y_train)  # tree alapú modelleknek nem szükséges scaling
+rf.fit(X_train_full, y_train)  # tree alapú modellekhez nem szükséges scaling
 y_pred = rf.predict(X_test_full)
 evaluate_model("Random Forest", y_test, y_pred)
 
@@ -71,7 +71,7 @@ gb.fit(X_train_full, y_train)
 y_pred = gb.predict(X_test_full)
 evaluate_model("Gradient Boosting", y_test, y_pred)
 
-# ========= SVM-FS ==========
+# ========= SVM-FS (feature selection + SVR) ==========
 # Feature selection
 selector = SelectKBest(f_regression, k=15)
 X_train_fs = selector.fit_transform(X_train_scaled, y_train)
@@ -83,7 +83,7 @@ svr_fs.fit(X_train_fs, y_train)
 y_pred = svr_fs.predict(X_test_fs)
 evaluate_model("SVM-FS", y_test, y_pred)
 
-# ========= DNN ==========
+# ========= Deep Neural Network ==========
 dnn = tf.keras.Sequential([
     tf.keras.layers.Input(shape=(X_train_scaled.shape[1],)),
     tf.keras.layers.Dense(64, activation='relu'),
@@ -97,6 +97,6 @@ evaluate_model("DNN", y_test, y_pred)
 
 # ========= Save results ==========
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE", "R2"])
-results_df.to_csv("results_svmfs_style.csv", index=False)
-print("\nSaved results to results_svmfs_style.csv")
+results_df.to_csv("results_median_imputation.csv", index=False)
+print("\nSaved results to results_median_imputation.csv")
 print(results_df)
