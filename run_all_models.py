@@ -6,8 +6,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.feature_selection import SelectKBest, f_regression
-from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 import tensorflow as tf
 
@@ -73,24 +73,14 @@ gb.fit(X_train_full, y_train)
 y_pred = gb.predict(X_test_full)
 evaluate_model("Gradient Boosting", y_test, y_pred)
 
-# ========= SVM-FS (feature selection + SVR with GridSearch) ==========
-# Dynamic k for SelectKBest
-k = min(25, X_numeric.shape[1])
-selector = SelectKBest(f_regression, k=k)
+# ========= SVM-FS (feature selection + SVR) ==========
+selector = SelectKBest(f_regression, k=15)
 X_train_fs = selector.fit_transform(X_train_scaled, y_train)
 X_test_fs = selector.transform(X_test_scaled)
 
-# Grid search for SVR hyperparameters
-param_grid = {
-    'C': [10, 50, 100],
-    'gamma': ['scale', 'auto'],
-    'epsilon': [0.01, 0.1, 0.5]
-}
-grid = GridSearchCV(SVR(kernel='rbf'), param_grid, scoring='r2', cv=3)
-grid.fit(X_train_fs, y_train)
-svr_fs_best = grid.best_estimator_
-
-y_pred = svr_fs_best.predict(X_test_fs)
+svr_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
+svr_fs.fit(X_train_fs, y_train)
+y_pred = svr_fs.predict(X_test_fs)
 evaluate_model("SVM-FS", y_test, y_pred)
 
 # ========= Deep Neural Network ==========
