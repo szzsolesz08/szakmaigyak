@@ -53,12 +53,17 @@ y = df.iloc[:, -1]
 # Drop constant or all-NaN columns
 X = X.loc[:, X.nunique() > 1]
 
+# Convert all columns to numeric, coerce errors to NaN
+for col in X.columns:
+    X[col] = pd.to_numeric(X[col], errors='coerce')
+
 # Impute missing values
 imputer = SimpleImputer(strategy="median")
 X_imputed = imputer.fit_transform(X)
 X = pd.DataFrame(X_imputed, columns=X.columns)
 
 # Remove NaNs from target
+y = pd.to_numeric(y, errors='coerce')
 mask = ~np.isnan(y)
 X = X.loc[mask]
 y = y.loc[mask]
