@@ -6,9 +6,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import SelectKBest, f_regression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import tensorflow as tf
 
 # ========= Helper metric ==========
@@ -16,99 +15,75 @@ def smape(y_true, y_pred):
     return 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))
 
 # ========= Load data ==========
-print("Loading data from Data/ ...")
 data_dir = "Data"
 files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
-print("Found CSV files:", files)
-
-dfs = []
-for f in files:
-    path = os.path.join(data_dir, f)
-    df = pd.read_csv(path)
-    dfs.append(df)
+dfs = [pd.read_csv(os.path.join(data_dir, f)) for f in files]
 data = pd.concat(dfs, ignore_index=True)
-print("Data shape:", data.shape)
 
-# ========= Select target column ==========
 target_col = "arrivalDelay"
-if target_col not in data.columns:
-    raise ValueError(f"Target column '{target_col}' not found in dataset!")
-
-# Convert target to numeric and drop NaNs
-data[target_col] = pd.to_numeric(data[target_col], errors='coerce')
-data = data.dropna(subset=[target_col])
 
 # ========= Select numeric features ==========
 X_numeric = data.select_dtypes(include=[np.number]).drop(columns=[target_col], errors="ignore")
-
-# ========= Handle missing values ==========
-imputer = SimpleImputer(strategy="median")
-X_imputed = imputer.fit_transform(X_numeric)
-
-# ====== Create DataFrame with dynamic column names ======
-X = pd.DataFrame(X_imputed, columns=[f"num_{i}" for i in range(X_imputed.shape[1])])
-
 y = data[target_col]
 
-print(f"Features shape: {X.shape}, Target shape: {y.shape}")
-
-# ========= Split & scale ==========
-if len(X) < 10:
-    raise ValueError("Dataset too small after cleaning — check input CSVs!")
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Convert to numpy arrays
-X_train = X_train.values
-X_test = X_test.values
-y_train = pd.to_numeric(y_train, errors='coerce').values
-y_test = pd.to_numeric(y_test, errors='coerce').values
-
-# Remove NaNs in target
-mask_train = ~np.isnan(y_train)
-mask_test = ~np.isnan(y_test)
-
-X_train = X_train[mask_train]
-y_train = y_train[mask_train]
-X_test = X_test[mask_test]
-y_test = y_test[mask_test]
-
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+# ========= NaN kezelése ==========
+# A cikk szerint minden NaN -> 0
+X_numeric = X_numeric.fillna(0).astype(float)
+y = y.fillna(0).astype(float)
 
 results = []
 
 # ========= Model evaluation helper ==========
-def evaluate_model(name, model, X_train, X_test, y_train, y_test):
-    try:
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-        mae = mean_absolute_error(y_test, preds)
-        rmse = np.sqrt(mean_squared_error(y_test, preds))
-        sm = smape(y_test, preds)
-        results.append([name, mae, rmse, sm])
-        print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={sm:.3f}")
-    except Exception as e:
-        print(f"{name} failed: {e}")
+def evaluate_model(name, y_test, preds):
+    mae = mean_absolute_error(y_test, preds)
+    rmse = np.sqrt(mean_squared_error(y_test, preds))
+    sm = smape(y_test, preds)
+    r2 = r2_score(y_test, preds)
+    results.append([name, mae, rmse, sm, r2])
+    print(f"{name}: R2={r2:.5f}, MAE={mae:.5f}, RMSE={rmse:.5f}, sMAPE={sm:.5f}")
 
-# ========= Train models ==========
-evaluate_model("Linear Regression", LinearRegression(), X_train_scaled, X_test_scaled, y_train, y_test)
-evaluate_model("Random Forest", RandomForestRegressor(n_estimators=100, random_state=42), X_train, X_test, y_train, y_test)
-evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42), X_train, X_test, y_train, y_test)
+# ========= Train-test split ==========
+# Folyamatos 80%-20% split (nem véletlenszerű)
+split_index = int(0.8 * len(X_numeric))
+X_train_full, X_test_full = X_numeric[:split_index], X_numeric[split_index:]
+y_train, y_test = y[:split_index].values, y[split_index:].values
 
-# ========= SVM-FS (feature selection + SVR) ==========
-# Feature selection using f_regression
+# ========= Scaling ==========
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train_full)
+X_test_scaled = scaler.transform(X_test_full)
+
+# ========= Linear Regression ==========
+lr = LinearRegression()
+lr.fit(X_train_scaled, y_train)
+y_pred = lr.predict(X_test_scaled)
+evaluate_model("Linear Regression", y_test, y_pred)
+
+# ========= Random Forest ==========
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X_train_full, y_train)  # tree alapú modelleknek nem szükséges scaling
+y_pred = rf.predict(X_test_full)
+evaluate_model("Random Forest", y_test, y_pred)
+
+# ========= Gradient Boosting ==========
+gb = GradientBoostingRegressor(random_state=42)
+gb.fit(X_train_full, y_train)
+y_pred = gb.predict(X_test_full)
+evaluate_model("Gradient Boosting", y_test, y_pred)
+
+# ========= SVM-FS ==========
+# Feature selection
 selector = SelectKBest(f_regression, k=15)
 X_train_fs = selector.fit_transform(X_train_scaled, y_train)
 X_test_fs = selector.transform(X_test_scaled)
 
-# Support Vector Regression
+# SVR
 svr_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
-evaluate_model("SVM-FS", svr_fs, X_train_fs, X_test_fs, y_train, y_test)
+svr_fs.fit(X_train_fs, y_train)
+y_pred = svr_fs.predict(X_test_fs)
+evaluate_model("SVM-FS", y_test, y_pred)
 
-# ========= Deep Neural Network ==========
-print("Training simple DNN...")
+# ========= DNN ==========
 dnn = tf.keras.Sequential([
     tf.keras.layers.Input(shape=(X_train_scaled.shape[1],)),
     tf.keras.layers.Dense(64, activation='relu'),
@@ -117,16 +92,11 @@ dnn = tf.keras.Sequential([
 ])
 dnn.compile(optimizer='adam', loss='mae')
 dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
-preds_dnn = dnn.predict(X_test_scaled).flatten()
-mae_dnn = mean_absolute_error(y_test, preds_dnn)
-rmse_dnn = np.sqrt(mean_squared_error(y_test, preds_dnn))
-sm_dnn = smape(y_test, preds_dnn)
-results.append(["DNN", mae_dnn, rmse_dnn, sm_dnn])
-print(f"DNN: MAE={mae_dnn:.3f}, RMSE={rmse_dnn:.3f}, sMAPE={sm_dnn:.3f}")
+y_pred = dnn.predict(X_test_scaled).flatten()
+evaluate_model("DNN", y_test, y_pred)
 
 # ========= Save results ==========
-results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
-output_path = "results.csv"
-results_df.to_csv(output_path, index=False)
-print("\nSaved results to", output_path)
+results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE", "R2"])
+results_df.to_csv("results_svmfs_style.csv", index=False)
+print("\nSaved results to results_svmfs_style.csv")
 print(results_df)
