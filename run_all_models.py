@@ -1,131 +1,133 @@
 import os
-import pandas as pd
 import numpy as np
+import pandas as pd
+from datetime import datetime
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import LabelEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.svm import SVR
-from tensorflow import keras
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.callbacks import EarlyStopping
 
-# --- 1. Adatok betöltése ---
+# SMAPE function
+def smape(y_true, y_pred):
+    return 100 / len(y_true) * np.sum(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred)))
+
 print("Loading data from Data/ ...")
 
-data_dir = "Data"
-csv_files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+# Collect all CSV files from Data/
+data_path = "Data"
+csv_files = [f for f in os.listdir(data_path) if f.endswith(".csv")]
 print("Found CSV files:", csv_files)
 
-dfs = []
-for f in csv_files:
-    path = os.path.join(data_dir, f)
-    df = pd.read_csv(path, low_memory=False)
-    dfs.append(df)
+# Combine them
+dfs = [pd.read_csv(os.path.join(data_path, f), low_memory=False) for f in csv_files]
+df = pd.concat(dfs, axis=1)
+print("Data shape:", df.shape)
 
-data = pd.concat(dfs, axis=0, ignore_index=True)
-print("Data shape:", data.shape)
+# Handle missing values, non-numeric columns, etc.
+df = df.replace(",", ".", regex=True)
 
-# --- 2. Céloszlop és featurek kiválasztása ---
-target_col = "arrivalDelay"
-if target_col not in data.columns:
-    raise ValueError(f"Target column '{target_col}' not found in dataset!")
+# Encode non-numeric columns
+label_encoders = {}
+for col in df.columns:
+    if df[col].dtype == 'object':
+        le = LabelEncoder()
+        df[col] = le.fit_transform(df[col].astype(str))
+        label_encoders[col] = le
 
-possible_features = [
-    "stopSequence",
-    "depatureDelay",
-    "timestamp",
-    "arrivalTime",
-    "depatureTime",
-    "tripID",
-    "stopID",
-]
-existing_features = [f for f in possible_features if f in data.columns]
-X = data[existing_features].copy()
-y = data[target_col].copy()
+# Separate features and target
+X = df.iloc[:, :-1]
+y = df.iloc[:, -1]
 
-print(f"Features shape: {X.shape}, Target shape: {y.shape}")
+# Drop constant or all-NaN columns
+X = X.loc[:, X.nunique() > 1]
 
-# --- 3. Numerikus konverzió ---
-# Minden oszlopot numerikus típusra próbálunk konvertálni, a nem konvertálható értékek NaN lesznek
-for col in X.columns:
-    X[col] = (
-        X[col]
-        .astype(str)
-        .str.replace(",", ".", regex=False)
-        .replace("nan", np.nan)
-    )
-    X[col] = pd.to_numeric(X[col], errors="coerce")
-
-# --- 4. Hiányzó értékek kezelése ---
+# Impute missing values
 imputer = SimpleImputer(strategy="median")
-
-# Csak a nem üres oszlopok maradnak
-valid_columns = X.columns[X.notna().any()].tolist()
-X = X[valid_columns]
-
 X_imputed = imputer.fit_transform(X)
-X = pd.DataFrame(X_imputed, columns=valid_columns)
+X = pd.DataFrame(X_imputed, columns=X.columns)
 
-# Célváltozó tisztítása
-y = pd.to_numeric(y, errors="coerce")
-mask = ~y.isna()
+# Remove NaNs from target
+mask = ~np.isnan(y)
 X = X.loc[mask]
 y = y.loc[mask]
 
-# --- 5. Train-test split ---
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
+print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# --- 6. Standardizálás ---
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# --- 7. Modellek betanítása és kiértékelése ---
 results = []
 
-def evaluate_model(name, model):
-    try:
-        model.fit(X_train_scaled, y_train)
-        y_pred = model.predict(X_test_scaled)
-        mae = mean_absolute_error(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        smape = np.mean(2 * np.abs(y_pred - y_test) / (np.abs(y_pred) + np.abs(y_test) + 1e-8)) * 100
-        results.append((name, mae, rmse, smape))
-        print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
-    except Exception as e:
-        print(f"{name} failed: {e}")
+# 1. Linear Regression
+lr = LinearRegression()
+lr.fit(X_train, y_train)
+y_pred_lr = lr.predict(X_test)
+results.append(["Linear Regression",
+                mean_absolute_error(y_test, y_pred_lr),
+                np.sqrt(mean_squared_error(y_test, y_pred_lr)),
+                smape(y_test, y_pred_lr)])
 
-evaluate_model("Linear Regression", LinearRegression())
-evaluate_model("Random Forest", RandomForestRegressor(n_estimators=50, random_state=42))
-evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42))
-evaluate_model("SVR", SVR())
+# 2. Random Forest
+rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+rf.fit(X_train, y_train)
+y_pred_rf = rf.predict(X_test)
+results.append(["Random Forest",
+                mean_absolute_error(y_test, y_pred_rf),
+                np.sqrt(mean_squared_error(y_test, y_pred_rf)),
+                smape(y_test, y_pred_rf)])
 
-# --- 8. Egyszerű DNN ---
+# 3. Gradient Boosting
+gb = GradientBoostingRegressor(random_state=42)
+gb.fit(X_train, y_train)
+y_pred_gb = gb.predict(X_test)
+results.append(["Gradient Boosting",
+                mean_absolute_error(y_test, y_pred_gb),
+                np.sqrt(mean_squared_error(y_test, y_pred_gb)),
+                smape(y_test, y_pred_gb)])
+
+# 4. SVM-FS (replaces SVR)
+print("Running SVM-FS model...")
+# Feature selection
+selector = SelectKBest(f_regression, k=min(15, X_train.shape[1]))
+X_train_fs = selector.fit_transform(X_train, y_train)
+X_test_fs = selector.transform(X_test)
+
+svm_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
+svm_fs.fit(X_train_fs, y_train)
+y_pred_svmfs = svm_fs.predict(X_test_fs)
+
+results.append(["SVM-FS",
+                mean_absolute_error(y_test, y_pred_svmfs),
+                np.sqrt(mean_squared_error(y_test, y_pred_svmfs)),
+                smape(y_test, y_pred_svmfs)])
+
+# 5. Simple DNN
 print("Training simple DNN...")
-
-dnn = keras.Sequential([
-    keras.layers.Input(shape=(X_train_scaled.shape[1],)),
-    keras.layers.Dense(64, activation="relu"),
-    keras.layers.Dense(32, activation="relu"),
-    keras.layers.Dense(1)
+model = Sequential([
+    Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
+    Dense(32, activation='relu'),
+    Dense(1)
 ])
 
-dnn.compile(optimizer="adam", loss="mae")
-dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
+model.compile(optimizer='adam', loss='mae')
+early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
+model.fit(X_train, y_train, epochs=10, batch_size=256, verbose=1, callbacks=[early_stop])
 
-y_pred_dnn = dnn.predict(X_test_scaled).flatten()
-mae = mean_absolute_error(y_test, y_pred_dnn)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred_dnn))
-smape = np.mean(2 * np.abs(y_pred_dnn - y_test) / (np.abs(y_pred_dnn) + np.abs(y_test) + 1e-8)) * 100
+y_pred_dnn = model.predict(X_test).flatten()
+results.append(["DNN",
+                mean_absolute_error(y_test, y_pred_dnn),
+                np.sqrt(mean_squared_error(y_test, y_pred_dnn)),
+                smape(y_test, y_pred_dnn)])
 
-results.append(("DNN", mae, rmse, smape))
-print(f"DNN: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={smape:.3f}")
-
-# --- 9. Eredmények mentése ---
+# Save results
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
-results_df.to_csv("results.csv", index=False)
-print("\nSaved results to results.csv")
+print("Saved results to results.csv")
 print(results_df)
+results_df.to_csv("results.csv", index=False)
