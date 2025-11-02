@@ -28,9 +28,9 @@ X_numeric = data.select_dtypes(include=[np.number]).drop(columns=[target_col], e
 y = data[target_col]
 
 # ========= Imputer ==========
-# Medián imputálás mindenhol
 imputer_X = SimpleImputer(strategy='median')
-X_numeric = pd.DataFrame(imputer_X.fit_transform(X_numeric), columns=X_numeric.columns)
+X_numeric_imputed = imputer_X.fit_transform(X_numeric)
+X_numeric = pd.DataFrame(X_numeric_imputed, columns=[f"num_{i}" for i in range(X_numeric_imputed.shape[1])])
 
 imputer_y = SimpleImputer(strategy='median')
 y = pd.Series(imputer_y.fit_transform(y.values.reshape(-1,1)).flatten())
