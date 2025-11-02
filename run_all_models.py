@@ -1,151 +1,132 @@
 import os
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.svm import SVR
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import LabelEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import SelectKBest, f_regression
-from sklearn.svm import SVR
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.callbacks import EarlyStopping
+import tensorflow as tf
 
-# SMAPE function
+# ========= Helper metric ==========
 def smape(y_true, y_pred):
-    return 100 / len(y_true) * np.sum(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred)))
+    return 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))
 
+# ========= Load data ==========
 print("Loading data from Data/ ...")
+data_dir = "Data"
+files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+print("Found CSV files:", files)
 
-# Collect all CSV files from Data/
-data_path = "Data"
-csv_files = [f for f in os.listdir(data_path) if f.endswith(".csv")]
-print("Found CSV files:", csv_files)
+dfs = []
+for f in files:
+    path = os.path.join(data_dir, f)
+    df = pd.read_csv(path)
+    dfs.append(df)
+data = pd.concat(dfs, ignore_index=True)
+print("Data shape:", data.shape)
 
-# Load CSVs
-dfs = [pd.read_csv(os.path.join(data_path, f), low_memory=False) for f in csv_files]
+# ========= Select target column ==========
+target_col = "arrivalDelay"
+if target_col not in data.columns:
+    raise ValueError(f"Target column '{target_col}' not found in dataset!")
 
-# Handle duplicate column names and concatenate
-dfs_fixed = []
-existing_cols = set()
-for i, df_temp in enumerate(dfs):
-    new_cols = []
-    for col in df_temp.columns:
-        if col in existing_cols:
-            new_cols.append(f"{col}_{i}")
-        else:
-            new_cols.append(col)
-        existing_cols.add(new_cols[-1])
-    df_temp.columns = new_cols
-    dfs_fixed.append(df_temp)
+# Convert target to numeric and drop NaNs
+data[target_col] = pd.to_numeric(data[target_col], errors='coerce')
+data = data.dropna(subset=[target_col])
 
-df = pd.concat(dfs_fixed, axis=1, ignore_index=False)
-print("Data shape:", df.shape)
+# ========= Select numeric features ==========
+X_numeric = data.select_dtypes(include=[np.number]).drop(columns=[target_col], errors="ignore")
 
-# Replace commas with dots (for numeric conversion)
-df = df.replace(",", ".", regex=True)
-
-# Encode non-numeric columns
-label_encoders = {}
-for col in df.columns:
-    if df[col].dtype == 'object':
-        le = LabelEncoder()
-        df[col] = le.fit_transform(df[col].astype(str))
-        label_encoders[col] = le
-
-# Separate features and target
-X = df.iloc[:, :-1]
-y = df.iloc[:, -1]
-
-# Drop constant or all-NaN columns
-X = X.loc[:, X.nunique() > 1]
-
-# Convert all columns to numeric safely
-X = X.apply(pd.to_numeric, errors='coerce')
-y = pd.to_numeric(y, errors='coerce')
-
-# Impute missing values
+# ========= Handle missing values ==========
 imputer = SimpleImputer(strategy="median")
-X_imputed = imputer.fit_transform(X)
-X = pd.DataFrame(X_imputed, columns=X.columns)
+X_imputed = imputer.fit_transform(X_numeric)
 
-# Remove NaNs from target
-mask = ~np.isnan(y)
-X = X.loc[mask]
-y = y.loc[mask]
+# ====== Create DataFrame with dynamic column names ======
+X = pd.DataFrame(X_imputed, columns=[f"num_{i}" for i in range(X_imputed.shape[1])])
+
+y = data[target_col]
 
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# Split data
+# ========= Split & scale ==========
+if len(X) < 10:
+    raise ValueError("Dataset too small after cleaning — check input CSVs!")
+
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Convert to numpy arrays
+X_train = X_train.values
+X_test = X_test.values
+y_train = pd.to_numeric(y_train, errors='coerce').values
+y_test = pd.to_numeric(y_test, errors='coerce').values
+
+# Remove NaNs in target
+mask_train = ~np.isnan(y_train)
+mask_test = ~np.isnan(y_test)
+
+X_train = X_train[mask_train]
+y_train = y_train[mask_train]
+X_test = X_test[mask_test]
+y_test = y_test[mask_test]
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
 results = []
 
-# 1. Linear Regression
-lr = LinearRegression()
-lr.fit(X_train, y_train)
-y_pred_lr = lr.predict(X_test)
-results.append(["Linear Regression",
-                mean_absolute_error(y_test, y_pred_lr),
-                np.sqrt(mean_squared_error(y_test, y_pred_lr)),
-                smape(y_test, y_pred_lr)])
+# ========= Model evaluation helper ==========
+def evaluate_model(name, model, X_train, X_test, y_train, y_test):
+    try:
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        mae = mean_absolute_error(y_test, preds)
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        sm = smape(y_test, preds)
+        results.append([name, mae, rmse, sm])
+        print(f"{name}: MAE={mae:.3f}, RMSE={rmse:.3f}, sMAPE={sm:.3f}")
+    except Exception as e:
+        print(f"{name} failed: {e}")
 
-# 2. Random Forest
-rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-rf.fit(X_train, y_train)
-y_pred_rf = rf.predict(X_test)
-results.append(["Random Forest",
-                mean_absolute_error(y_test, y_pred_rf),
-                np.sqrt(mean_squared_error(y_test, y_pred_rf)),
-                smape(y_test, y_pred_rf)])
+# ========= Train models ==========
+evaluate_model("Linear Regression", LinearRegression(), X_train_scaled, X_test_scaled, y_train, y_test)
+evaluate_model("Random Forest", RandomForestRegressor(n_estimators=100, random_state=42), X_train, X_test, y_train, y_test)
+evaluate_model("Gradient Boosting", GradientBoostingRegressor(random_state=42), X_train, X_test, y_train, y_test)
 
-# 3. Gradient Boosting
-gb = GradientBoostingRegressor(random_state=42)
-gb.fit(X_train, y_train)
-y_pred_gb = gb.predict(X_test)
-results.append(["Gradient Boosting",
-                mean_absolute_error(y_test, y_pred_gb),
-                np.sqrt(mean_squared_error(y_test, y_pred_gb)),
-                smape(y_test, y_pred_gb)])
+# ========= SVM-FS (feature selection + SVR) ==========
+# Feature selection using f_regression
+selector = SelectKBest(f_regression, k=15)
+X_train_fs = selector.fit_transform(X_train_scaled, y_train)
+X_test_fs = selector.transform(X_test_scaled)
 
-# 4. SVM-FS (replaces SVR)
-print("Running SVM-FS model...")
-selector = SelectKBest(f_regression, k=min(15, X_train.shape[1]))
-X_train_fs = selector.fit_transform(X_train, y_train)
-X_test_fs = selector.transform(X_test)
+# Support Vector Regression
+svr_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
+evaluate_model("SVM-FS", svr_fs, X_train_fs, X_test_fs, y_train, y_test)
 
-svm_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
-svm_fs.fit(X_train_fs, y_train)
-y_pred_svmfs = svm_fs.predict(X_test_fs)
-
-results.append(["SVM-FS",
-                mean_absolute_error(y_test, y_pred_svmfs),
-                np.sqrt(mean_squared_error(y_test, y_pred_svmfs)),
-                smape(y_test, y_pred_svmfs)])
-
-# 5. Simple DNN
+# ========= Deep Neural Network ==========
 print("Training simple DNN...")
-model = Sequential([
-    Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
-    Dense(32, activation='relu'),
-    Dense(1)
+dnn = tf.keras.Sequential([
+    tf.keras.layers.Input(shape=(X_train_scaled.shape[1],)),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dense(32, activation='relu'),
+    tf.keras.layers.Dense(1)
 ])
+dnn.compile(optimizer='adam', loss='mae')
+dnn.fit(X_train_scaled, y_train, epochs=10, batch_size=64, verbose=0)
+preds_dnn = dnn.predict(X_test_scaled).flatten()
+mae_dnn = mean_absolute_error(y_test, preds_dnn)
+rmse_dnn = np.sqrt(mean_squared_error(y_test, preds_dnn))
+sm_dnn = smape(y_test, preds_dnn)
+results.append(["DNN", mae_dnn, rmse_dnn, sm_dnn])
+print(f"DNN: MAE={mae_dnn:.3f}, RMSE={rmse_dnn:.3f}, sMAPE={sm_dnn:.3f}")
 
-model.compile(optimizer='adam', loss='mae')
-early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
-model.fit(X_train, y_train, epochs=10, batch_size=256, verbose=1, callbacks=[early_stop])
-
-y_pred_dnn = model.predict(X_test).flatten()
-results.append(["DNN",
-                mean_absolute_error(y_test, y_pred_dnn),
-                np.sqrt(mean_squared_error(y_test, y_pred_dnn)),
-                smape(y_test, y_pred_dnn)])
-
-# Save results
+# ========= Save results ==========
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE"])
-print("Saved results to results.csv")
+output_path = "results.csv"
+results_df.to_csv(output_path, index=False)
+print("\nSaved results to", output_path)
 print(results_df)
-results_df.to_csv("results.csv", index=False)
