@@ -8,6 +8,7 @@ from sklearn.svm import SVR
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
 import tensorflow as tf
 
 # ========= Helper metric ==========
@@ -26,15 +27,15 @@ target_col = "arrivalDelay"
 X_numeric = data.select_dtypes(include=[np.number]).drop(columns=[target_col], errors="ignore")
 y = data[target_col]
 
-# ========= NaN kezelése ==========
+# ========= Imputer ==========
 # Medián imputálás mindenhol
-X_numeric = X_numeric.fillna(X_numeric.median())
-y = y.fillna(y.median())
+imputer_X = SimpleImputer(strategy='median')
+X_numeric = pd.DataFrame(imputer_X.fit_transform(X_numeric), columns=X_numeric.columns)
 
-results = []
+imputer_y = SimpleImputer(strategy='median')
+y = pd.Series(imputer_y.fit_transform(y.values.reshape(-1,1)).flatten())
 
 # ========= Train-test split ==========
-# Véletlenszerű split 80-20%
 X_train_full, X_test_full, y_train, y_test = train_test_split(
     X_numeric, y, test_size=0.2, random_state=42
 )
@@ -45,6 +46,7 @@ X_train_scaled = scaler.fit_transform(X_train_full)
 X_test_scaled = scaler.transform(X_test_full)
 
 # ========= Model evaluation helper ==========
+results = []
 def evaluate_model(name, y_test, preds):
     mae = mean_absolute_error(y_test, preds)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
@@ -61,7 +63,7 @@ evaluate_model("Linear Regression", y_test, y_pred)
 
 # ========= Random Forest ==========
 rf = RandomForestRegressor(n_estimators=100, random_state=42)
-rf.fit(X_train_full, y_train)  # tree alapú modellekhez nem szükséges scaling
+rf.fit(X_train_full, y_train)
 y_pred = rf.predict(X_test_full)
 evaluate_model("Random Forest", y_test, y_pred)
 
@@ -72,12 +74,10 @@ y_pred = gb.predict(X_test_full)
 evaluate_model("Gradient Boosting", y_test, y_pred)
 
 # ========= SVM-FS (feature selection + SVR) ==========
-# Feature selection
 selector = SelectKBest(f_regression, k=15)
 X_train_fs = selector.fit_transform(X_train_scaled, y_train)
 X_test_fs = selector.transform(X_test_scaled)
 
-# SVR
 svr_fs = SVR(kernel='rbf', C=100, gamma='auto', epsilon=0.1)
 svr_fs.fit(X_train_fs, y_train)
 y_pred = svr_fs.predict(X_test_fs)
