@@ -97,6 +97,6 @@ evaluate_model("DNN", y_test, y_pred)
 
 # ========= Save results ==========
 results_df = pd.DataFrame(results, columns=["Model", "MAE", "RMSE", "sMAPE", "R2"])
-results_df.to_csv("results_median_imputation.csv", index=False)
-print("\nSaved results to results_median_imputation.csv")
+results_df.to_csv("results.csv", index=False)
+print("\nSaved results to results.csv")
 print(results_df)
